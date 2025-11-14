@@ -71,12 +71,14 @@ function JobTrackerPage() {
   const [filter, setFilter] = useState<string>("all");
   const [search, setSearch] = useState<string>("");
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [showImport, setShowImport] = useState<boolean>(false);
   const [importText, setImportText] = useState<string>("");
   const [notesDraft, setNotesDraft] = useState<string>("");
   const [notesSaving, setNotesSaving] = useState<boolean>(false);
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState<boolean>(false);
+  const [bulkDeleting, setBulkDeleting] = useState<boolean>(false);
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = { all: jobs.length };
@@ -104,6 +106,7 @@ function JobTrackerPage() {
       if (!res.ok) throw new Error("Failed to fetch jobs");
       const data = (await res.json()) as Job[];
       setJobs(data);
+      setSelectedIds((prev) => prev.filter((id) => data.some((job) => job.id === id)));
 
       if (selectedJob) {
         const updated = data.find((j) => j.id === selectedJob.id) ?? null;
@@ -178,6 +181,7 @@ function JobTrackerPage() {
       await loadJobs();
       await loadStats();
       if (selectedJob?.id === id) setSelectedJob(null);
+      setSelectedIds((prev) => prev.filter((jobId) => jobId !== id));
     } catch (err) {
       console.error(err);
     }
@@ -187,6 +191,48 @@ function JobTrackerPage() {
     setSelectedJob(job);
     setNotesDraft(job.notes ?? "");
     setIsDescriptionExpanded(false);
+  }
+
+  function toggleSelectedJob(id: number) {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((jobId) => jobId !== id) : [...prev, id]));
+  }
+
+  function clearSelectedJobs() {
+    setSelectedIds([]);
+  }
+
+  function selectAllJobs() {
+    if (jobs.length === 0) return;
+    setSelectedIds(jobs.map((job) => job.id));
+  }
+
+  async function deleteSelectedJobs() {
+    if (selectedIds.length === 0) return;
+    const confirmed = globalThis.confirm?.(`Delete ${selectedIds.length} selected job${selectedIds.length > 1 ? "s" : ""}?`);
+    if (!confirmed) return;
+    try {
+      setBulkDeleting(true);
+      const res = await fetch(`${API_BASE}/jobs/bulk`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: selectedIds }),
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to delete jobs");
+      }
+      setSelectedIds([]);
+      if (selectedJob && selectedIds.includes(selectedJob.id)) {
+        setSelectedJob(null);
+      }
+      await loadJobs();
+      await loadStats();
+    } catch (err) {
+      console.error(err);
+      alert(err instanceof Error ? err.message : "Failed to delete selected jobs");
+    } finally {
+      setBulkDeleting(false);
+    }
   }
 
   async function importJobs() {
@@ -222,118 +268,132 @@ function JobTrackerPage() {
     ? `${descriptionText.slice(0, 700).trimEnd()}…`
     : descriptionText;
   const jobListLoading = loading && jobs.length === 0;
+  const selectedCount = selectedIds.length;
+  const hasBulkSelection = selectedCount > 0;
+  const allVisibleSelected = jobs.length > 0 && selectedCount === jobs.length;
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900">
-      <header className="border-b bg-white/90 backdrop-blur">
-        <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">Job Tracker</p>
-              <h1 className="mt-1 text-2xl font-semibold text-slate-900 sm:text-3xl">Stay on top of every lead</h1>
-              <p className="mt-1 text-sm text-slate-500">
-                {stats
-                  ? `Tracking ${stats.total} roles across ${stats.companies} companies.`
-                  : "Use filters and notes to keep your job search organized."}
-              </p>
+    <div className="min-h-screen bg-gradient-to-b from-[#080512] via-[#0b071a] to-[#05030b] text-slate-100">
+      <header className="relative overflow-hidden border-b border-white/10 bg-gradient-to-br from-[#150a33] via-[#0d071f] to-[#05030b] text-white shadow-[0_30px_80px_rgba(0,0,0,0.6)]">
+        <div className="pointer-events-none absolute inset-y-0 left-1/2 hidden w-1/2 bg-gradient-to-t from-cyan-500/10 to-transparent blur-3xl lg:block" />
+        <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
+          <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-between">
+            <div className="max-w-2xl space-y-3">
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-semibold tracking-[0.2em] uppercase">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                Job Tracker
+              </div>
+              <div>
+                <h1 className="text-3xl font-semibold leading-tight sm:text-4xl lg:text-5xl">Modern pipeline for chaotic job hunts</h1>
+                <p className="mt-3 text-base text-white/70 sm:text-lg">
+                  {stats
+                    ? `You're watching ${stats.total} openings across ${stats.companies} companies. Keep the pipeline honest with filters, notes, and live stats.`
+                    : "Bring in leads, tag statuses, jot notes, and keep momentum without spreadsheets slowing you down."}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => {
+                    void loadJobs();
+                    void loadStats();
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-white/30 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10"
+                  type="button"
+                >
+                  ↻ Refresh data
+                </button>
+                <button
+                  onClick={() => setShowImport((v) => !v)}
+                  className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-100"
+                  type="button"
+                >
+                  {showImport ? "✕ Close Import" : "📥 Import Jobs"}
+                </button>
+              </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => {
-                  void loadJobs();
-                  void loadStats();
-                }}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                type="button"
-              >
-                ↻ Refresh
-              </button>
-              <button
-                onClick={() => setShowImport((v) => !v)}
-                className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800"
-                type="button"
-              >
-                {showImport ? "✕ Close Import" : "📥 Import Jobs"}
-              </button>
-            </div>
+            {stats && (
+              <div className="grid w-full max-w-lg grid-cols-2 gap-3 text-left sm:grid-cols-4 lg:max-w-none">
+                <StatCard label="Tracked" value={stats.total} accent="text-white" />
+                <StatCard label="New" value={stats.new} accent="text-cyan-200" />
+                <StatCard label="Applied" value={stats.applied} accent="text-emerald-200" />
+                <StatCard label="Companies" value={stats.companies} accent="text-white" />
+              </div>
+            )}
           </div>
-
-          {stats && (
-            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <StatCard label="Tracked Roles" value={stats.total} accent="text-slate-900" />
-              <StatCard label="New Leads" value={stats.new} accent="text-blue-700" />
-              <StatCard label="Applied" value={stats.applied} accent="text-emerald-700" />
-              <StatCard label="Companies" value={stats.companies} accent="text-slate-900" />
-            </div>
-          )}
         </div>
       </header>
 
       {showImport && (
-        <section className="mx-auto w-full max-w-6xl px-4 py-4 sm:px-6">
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white/90 p-4 shadow-sm sm:p-6">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+        <section className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+          <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-[#130b26]/90 p-6 shadow-[0_25px_60px_rgba(0,0,0,0.6)] ring-1 ring-white/5">
+            <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-1/3 bg-gradient-to-t from-[#ff7a18]/20 via-transparent to-transparent blur-3xl md:block" />
+            <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
-                <h2 className="text-base font-semibold text-slate-900">Quick import</h2>
-                <p className="text-xs text-slate-500">Paste raw JSON from Apify (single job or array) and we handle the rest.</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/50">Import</p>
+                <h2 className="text-2xl font-semibold text-white">Drop JSON, get leads instantly</h2>
+                <p className="text-sm text-white/70">
+                  Works with single Apify payloads or full arrays. We validate everything before inserting.
+                </p>
               </div>
               <button
                 onClick={() => {
                   setShowImport(false);
                   setImportText("");
                 }}
-                className="text-xs font-medium text-slate-500 underline-offset-4 hover:underline"
+                className="text-sm font-semibold text-white/60 underline-offset-4 transition hover:text-white hover:underline"
               >
                 Cancel
               </button>
             </div>
             <textarea
-              className="mt-4 h-40 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-700 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+              className="mt-5 h-44 w-full rounded-2xl border border-white/10 bg-[#1b1433] px-4 py-3 text-sm font-mono text-white shadow-inner focus:border-[#c084fc] focus:bg-[#1f173c] focus:outline-none focus:ring-4 focus:ring-[#c084fc]/20"
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
               placeholder='[ { "title": "...", "companyName": "...", ... } ]'
             />
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <button
                 onClick={importJobs}
-                className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500"
+                className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-[#ff7a18] to-[#a855f7] px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-[#a855f7]/30 transition hover:opacity-95"
               >
                 Import jobs
               </button>
-              <p className="text-xs text-slate-500">Tip: validate JSON with Cmd + Enter in your editor before pasting.</p>
+              <p className="text-xs text-white/60">Pro tip: Cmd/Ctrl + Enter formats JSON in most editors before paste.</p>
             </div>
           </div>
         </section>
       )}
 
-      <section className="mx-auto w-full max-w-6xl px-4 pt-4 sm:px-6">
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+      <section className="mx-auto w-full max-w-6xl px-4 pt-6 sm:px-6 lg:px-8">
+        <div className="rounded-3xl border border-white/10 bg-[#120c24]/80 p-5 shadow-[0_25px_60px_rgba(0,0,0,0.5)]">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center">
             <div className="relative flex-1">
-              <span className="pointer-events-none absolute left-3 top-2.5 text-slate-400">🔍</span>
+              <span className="pointer-events-none absolute left-4 top-2.5 text-lg text-white/30">⌕</span>
               <input
                 type="text"
-                placeholder="Search by title, company, tech stack, or description..."
+                placeholder="Search job title, company, tech stack, or description"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-200"
+                className="w-full rounded-2xl border border-white/10 bg-[#1c1534] py-3 pl-11 pr-4 text-sm text-white placeholder:text-white/40 focus:border-[#a855f7]/60 focus:bg-[#20183d] focus:outline-none focus:ring-4 focus:ring-[#a855f7]/20"
               />
+              <div className="pointer-events-none absolute right-4 top-2.5 text-xs uppercase tracking-[0.4em] text-white/30">
+                {loading ? "SYNCING" : "READY"}
+              </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3 text-xs font-semibold text-white/50">
               {filtersActive && (
                 <button
-                  className="text-xs font-semibold text-slate-500 underline-offset-4 hover:underline"
+                  className="rounded-full border border-white/20 px-3 py-1 text-[11px] uppercase tracking-wide text-white transition hover:border-white/40"
                   onClick={() => {
                     setSearch("");
                     setFilter("all");
                   }}
+                  type="button"
                 >
-                  Reset filters
+                  Reset Filters
                 </button>
               )}
-              <div className="text-xs text-slate-500">
-                {loading ? "Updating results..." : `${jobs.length} job${jobs.length === 1 ? "" : "s"} visible`}
-              </div>
+              <span className="text-white/30">{loading ? "Updating results…" : `${jobs.length} visible`}</span>
             </div>
           </div>
 
@@ -346,18 +406,20 @@ function JobTrackerPage() {
                   key={tab.value}
                   type="button"
                   onClick={() => setFilter(tab.value)}
-                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                  className={`inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-semibold transition ${
                     isActive
-                      ? "border-slate-900 bg-slate-900 text-white shadow-sm"
-                      : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300"
+                      ? "bg-gradient-to-r from-[#ff7a18] to-[#a855f7] text-white shadow-[0_10px_30px_rgba(168,85,247,0.35)]"
+                      : "bg-white/5 text-white/70 hover:bg-white/10"
                   }`}
                 >
                   <span>{tab.label}</span>
-                  {tab.value === "all" ? (
-                    <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px]">{jobs.length}</span>
-                  ) : (
-                    <span className="rounded-full bg-white/60 px-2 py-0.5 text-[11px] text-slate-500">{count}</span>
-                  )}
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] ${
+                      isActive ? "bg-white/30 text-white" : "bg-white/10 text-white/70"
+                    }`}
+                  >
+                    {tab.value === "all" ? jobs.length : count}
+                  </span>
                 </button>
               );
             })}
@@ -365,66 +427,134 @@ function JobTrackerPage() {
         </div>
       </section>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-8 pt-4 sm:px-6">
-        <div className="grid gap-4 lg:grid-cols-[2fr,3fr]">
-          <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-              <h2 className="text-sm font-semibold text-slate-700">Saved roles</h2>
-              <span className="text-xs text-slate-500">
-                {loading ? "Fetching…" : `${jobs.length} item${jobs.length === 1 ? "" : "s"}`}
-              </span>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-10 pt-6 text-slate-100 sm:px-6 lg:px-8">
+        <div className="grid gap-6 lg:grid-cols-[1.8fr,2.2fr]">
+          <section className="rounded-[28px] border border-white/10 bg-[#120c24]/90 shadow-[0_25px_60px_rgba(0,0,0,0.55)]">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 px-6 py-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.4em] text-white/40">Pipeline</p>
+                <h2 className="text-lg font-semibold text-white">Saved opportunities</h2>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs font-semibold text-white/50">
+                <span>{loading ? "Syncing…" : `${jobs.length} total`}</span>
+                {hasBulkSelection && (
+                  <span className="rounded-full bg-white/10 px-3 py-1 text-[10px] uppercase tracking-[0.3em]">{selectedCount} selected</span>
+                )}
+                <div className="flex items-center gap-2 text-[11px] font-semibold">
+                  <button
+                    type="button"
+                    onClick={allVisibleSelected ? clearSelectedJobs : selectAllJobs}
+                    disabled={jobs.length === 0}
+                    className={`rounded-full border px-3 py-1 transition ${
+                      jobs.length === 0
+                        ? "cursor-not-allowed border-white/10 text-white/30"
+                        : "border-white/15 text-white/70 hover:border-white/30"
+                    }`}
+                  >
+                    {allVisibleSelected ? "Deselect all" : "Select all"}
+                  </button>
+                  {hasBulkSelection && (
+                    <button
+                      type="button"
+                      onClick={clearSelectedJobs}
+                      className="rounded-full border border-white/15 px-3 py-1 text-white/70 transition hover:border-white/30"
+                    >
+                      Clear
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={deleteSelectedJobs}
+                    disabled={!hasBulkSelection || bulkDeleting}
+                    className={`rounded-full px-4 py-1.5 text-white transition ${
+                      !hasBulkSelection || bulkDeleting
+                        ? "cursor-not-allowed bg-white/10 text-white/40"
+                        : "bg-gradient-to-r from-[#ff7a18] to-[#a855f7] shadow-[0_10px_30px_rgba(168,85,247,0.35)] hover:opacity-90"
+                    }`}
+                  >
+                    {bulkDeleting ? "Deleting…" : "Bulk delete"}
+                  </button>
+                </div>
+              </div>
             </div>
             {jobListLoading ? (
               <JobListSkeleton />
             ) : jobs.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-1 px-4 py-12 text-center">
-                <p className="text-sm font-medium text-slate-700">No roles yet</p>
-                <p className="text-xs text-slate-500">
-                  Import from Apify or adjust your filters to see results.
-                </p>
+              <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
+                <span className="rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white/70">No roles yet</span>
+                <p className="text-sm text-white/50">Import from Apify or adjust filters to get started.</p>
               </div>
             ) : (
-              <div className="max-h-[560px] overflow-auto px-3 py-4">
+              <div className="max-h-[600px] overflow-auto px-4 py-4">
                 <div className="flex flex-col gap-3">
                   {jobs.map((job) => {
                     const statusStyles = STATUS_COLORS[job.status] ?? {
                       badge: "bg-slate-100 text-slate-700 border-slate-200",
                       dot: "bg-slate-400",
                     };
+                    const isActive = selectedJob?.id === job.id;
+                    const isSelectedCard = selectedIds.includes(job.id);
+                    const highlightCard = isActive || isSelectedCard;
                     return (
                       <button
                         key={job.id}
                         onClick={() => handleSelectJob(job)}
-                        className={`w-full rounded-2xl border px-4 py-3 text-left transition-all ${
-                          selectedJob?.id === job.id
-                            ? "border-slate-900 bg-slate-900/5 shadow-sm ring-2 ring-slate-900/20"
-                            : "border-transparent bg-slate-50 hover:border-slate-200"
+                        className={`group relative w-full rounded-2xl border px-5 py-4 pl-7 pt-6 text-left transition-all ${
+                          highlightCard
+                            ? "border-white/40 bg-white/10 shadow-lg shadow-black/40 ring-2 ring-[#a855f7]/30"
+                            : "border-white/5 bg-white/5 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/10"
                         }`}
                       >
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleSelectedJob(job.id);
+                          }}
+                          className={`absolute left-3 top-3 inline-flex h-6 w-6 items-center justify-center rounded-full border text-xs font-semibold transition ${
+                            isSelectedCard
+                              ? "border-transparent bg-gradient-to-r from-[#ff7a18] to-[#a855f7] text-white"
+                              : "border-white/30 bg-white/5 text-white/40 hover:border-white/60"
+                          }`}
+                          aria-pressed={isSelectedCard}
+                        >
+                          {isSelectedCard ? "✓" : "+"}
+                        </button>
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="text-sm font-semibold text-slate-900">{job.title}</p>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {job.companyName ?? "Unknown company"}
-                              {job.location ? ` • ${job.location}` : ""}
+                            <p className="text-base font-semibold text-white">{job.title}</p>
+                            <p className="mt-1 text-xs uppercase tracking-wide text-white/40">
+                              {job.companyName ?? "Unknown"}
+                              {job.location ? ` · ${job.location}` : ""}
                             </p>
                           </div>
-                          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${statusStyles.badge}`}>
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] uppercase tracking-[0.2em] ${statusStyles.badge}`}
+                          >
                             <span className={`h-1.5 w-1.5 rounded-full ${statusStyles.dot}`} />
                             {STATUS_LABELS[job.status] ?? job.status}
                           </span>
                         </div>
-                        <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-500">
-                          {job.via && <span className="rounded-full bg-white/70 px-2 py-0.5">🔗 via {job.via}</span>}
+                        <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-white/60">
+                          {job.via && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5">
+                              🔗 via {job.via}
+                            </span>
+                          )}
                           {job.applyLink?.length ? (
-                            <span className="rounded-full bg-white/70 px-2 py-0.5">{job.applyLink.length} link{job.applyLink.length > 1 ? "s" : ""}</span>
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5">
+                              {job.applyLink.length} link{job.applyLink.length > 1 ? "s" : ""}
+                            </span>
                           ) : null}
                           {job.description && (
-                            <span className="rounded-full bg-white/70 px-2 py-0.5">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5">
                               {Math.min(job.description.length, 999)} chars
                             </span>
                           )}
                         </div>
+                        <span className="pointer-events-none absolute inset-y-0 right-3 hidden items-center text-white/20 transition group-hover:text-white/50 sm:flex">
+                          ↗
+                        </span>
                       </button>
                     );
                   })}
@@ -433,21 +563,33 @@ function JobTrackerPage() {
             )}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:p-6">
+          <section className="rounded-[28px] border border-white/10 bg-[#120c24]/90 p-5 shadow-[0_25px_60px_rgba(0,0,0,0.55)] lg:p-7">
             {selectedJob ? (
-              <div className="flex h-full flex-col gap-4">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Currently viewing</p>
-                  <h2 className="mt-1 text-xl font-semibold text-slate-900">{selectedJob.title}</h2>
-                  <div className="mt-1 flex flex-wrap gap-2 text-sm text-slate-500">
+              <div className="flex h-full flex-col gap-5">
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.4em] text-white/50">Active role</p>
+                      <h2 className="mt-1 text-2xl font-semibold text-white">{selectedJob.title}</h2>
+                    </div>
+                    <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-white/70">
+                      #{selectedJob.id}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-sm text-white/70">
                     {selectedJob.companyName && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold">
                         🏢 {selectedJob.companyName}
                       </span>
                     )}
                     {selectedJob.location && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold">
                         📍 {selectedJob.location}
+                      </span>
+                    )}
+                    {selectedJob.via && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold">
+                        🔗 via {selectedJob.via}
                       </span>
                     )}
                   </div>
@@ -460,10 +602,10 @@ function JobTrackerPage() {
                       <button
                         key={value}
                         onClick={() => updateJobStatus(selectedJob.id, value)}
-                        className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                        className={`rounded-full border px-3 py-1 text-xs font-semibold shadow-sm transition ${
                           isActive
-                            ? "border-slate-900 bg-slate-900 text-white"
-                            : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300"
+                            ? "border-transparent bg-gradient-to-r from-[#ff7a18] to-[#a855f7] text-white"
+                            : "border-white/20 bg-white/5 text-white/70 hover:border-white/40"
                         }`}
                       >
                         {label}
@@ -473,16 +615,16 @@ function JobTrackerPage() {
                 </div>
 
                 {selectedJob.applyLink && selectedJob.applyLink.length > 0 && (
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Apply links</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.4em] text-white/50">Apply links</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
                       {selectedJob.applyLink.map((link) => (
                         <a
                           key={`${link.title}-${link.link}`}
                           href={link.link}
                           target="_blank"
                           rel="noreferrer"
-                          className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-3 py-1 text-xs font-semibold text-white transition hover:bg-blue-500"
+                          className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-[#ff7a18] to-[#a855f7] px-4 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
                         >
                           ↗ {link.title}
                         </a>
@@ -491,32 +633,32 @@ function JobTrackerPage() {
                   </div>
                 )}
 
-                <div className="flex-1 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                <div className="flex-1 rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="flex items-center justify-between">
-                    <p className="text-sm font-semibold text-slate-700">Job description</p>
+                    <p className="text-sm font-semibold text-white">Job description</p>
                     {descriptionText && (
                       <button
                         type="button"
-                        className="text-xs font-medium text-slate-500 underline-offset-4 hover:underline"
+                        className="text-xs font-medium text-white/70 underline-offset-4 hover:text-white hover:underline"
                         onClick={() => setIsDescriptionExpanded((prev) => !prev)}
                       >
                         {isDescriptionExpanded ? "Show less" : "Expand"}
                       </button>
                     )}
                   </div>
-                  <div className="mt-2 text-sm leading-relaxed text-slate-700">
+                  <div className="mt-2 text-sm leading-relaxed text-white/80">
                     {descriptionText ? (
                       <p className="whitespace-pre-line">{visibleDescription}</p>
                     ) : (
-                      <span className="text-slate-400">No description available.</span>
+                      <span className="text-white/40">No description available.</span>
                     )}
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-slate-100 bg-white p-4">
-                  <label className="text-sm font-semibold text-slate-700">Notes</label>
+                <div className="rounded-2xl border border-white/10 bg-[#150c2d] p-4">
+                  <label className="text-sm font-semibold text-white">Notes</label>
                   <textarea
-                    className="mt-2 h-28 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 focus:border-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-200"
+                    className="mt-2 h-28 w-full rounded-xl border border-white/10 bg-[#1d1336] px-3 py-2 text-sm text-white focus:border-[#a855f7] focus:bg-[#221642] focus:outline-none focus:ring-2 focus:ring-[#a855f7]/30"
                     value={notesDraft}
                     onChange={(e) => setNotesDraft(e.target.value)}
                     placeholder="Capture interview prep, recruiter feedback, follow-ups…"
@@ -527,8 +669,8 @@ function JobTrackerPage() {
                       disabled={!notesChanged || notesSaving}
                       className={`inline-flex items-center gap-2 rounded-full px-4 py-1.5 font-semibold transition ${
                         !notesChanged || notesSaving
-                          ? "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
-                          : "border border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
+                          ? "cursor-not-allowed border border-white/10 bg-white/5 text-white/40"
+                          : "border-transparent bg-gradient-to-r from-[#ff7a18] to-[#a855f7] text-white hover:opacity-90"
                       }`}
                     >
                       {notesSaving ? "Saving…" : "Save notes"}
@@ -537,7 +679,7 @@ function JobTrackerPage() {
                       <button
                         type="button"
                         onClick={() => setNotesDraft(selectedJob.notes ?? "")}
-                        className="inline-flex items-center gap-2 rounded-full border border-transparent px-3 py-1.5 text-slate-500 hover:text-slate-700"
+                        className="inline-flex items-center gap-2 rounded-full border border-transparent px-3 py-1.5 text-white/60 hover:text-white"
                       >
                         Reset
                       </button>
@@ -548,25 +690,23 @@ function JobTrackerPage() {
                 <div className="flex flex-wrap justify-between gap-2">
                   <button
                     onClick={() => deleteJob(selectedJob.id)}
-                    className="inline-flex items-center gap-2 rounded-full border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-600 transition hover:bg-rose-50"
+                    className="inline-flex items-center gap-2 rounded-full border border-rose-400/50 px-4 py-2 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/10"
                   >
                     🗑️ Delete role
                   </button>
                   <button
                     onClick={() => setSelectedJob(null)}
-                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                    className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-xs font-semibold text-white/70 transition hover:bg-white/5"
                   >
                     Close panel
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">
-                <span className="text-3xl">🗂️</span>
-                <p className="font-medium text-slate-700">Select a job to see full details</p>
-                <p className="text-xs text-slate-500">
-                  Choose a role from the left panel to update notes, status, and application links.
-                </p>
+              <div className="flex h-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-white/20 bg-white/5 p-8 text-center text-sm text-white/60">
+                <span className="text-4xl">🗂️</span>
+                <p className="text-base font-semibold text-white">Select a job to view the playbook</p>
+                <p className="text-xs text-white/60">Choose a role from the pipeline to update notes, status, and links.</p>
               </div>
             )}
           </section>
@@ -580,23 +720,23 @@ export default JobTrackerPage;
 
 function StatCard({ label, value, accent }: { label: string; value: number; accent: string }) {
   return (
-    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className={`mt-1 text-2xl font-semibold ${accent}`}>{value}</p>
+    <div className="rounded-2xl border border-white/30 bg-white/10 px-4 py-3 backdrop-blur">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.4em] text-white/60">{label}</p>
+      <p className={`mt-2 text-3xl font-semibold ${accent}`}>{value}</p>
     </div>
   );
 }
 
 function JobListSkeleton() {
   return (
-    <div className="space-y-3 px-4 py-4">
+    <div className="space-y-3 px-5 py-5">
       {Array.from({ length: 4 }).map((_, idx) => (
-        <div key={idx} className="animate-pulse rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <div className="h-4 w-2/3 rounded bg-slate-200" />
-          <div className="mt-2 h-3 w-1/3 rounded bg-slate-200" />
+        <div key={idx} className="animate-pulse rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div className="h-4 w-2/3 rounded bg-white/20" />
+          <div className="mt-2 h-3 w-1/3 rounded bg-white/15" />
           <div className="mt-4 flex gap-2">
-            <div className="h-3 w-12 rounded-full bg-slate-200" />
-            <div className="h-3 w-16 rounded-full bg-slate-200" />
+            <div className="h-3 w-12 rounded-full bg-white/10" />
+            <div className="h-3 w-16 rounded-full bg-white/10" />
           </div>
         </div>
       ))}
